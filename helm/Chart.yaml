@@ -2,6 +2,5 @@ apiVersion: v2
 name: catalogue
 description: Roboshop Catalogue Helm Chart
 type: application
-
 version: 1.0.0
 appVersion: "1.0.0"

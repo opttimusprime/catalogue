@@ -5,7 +5,6 @@ WORKDIR /app
 
 # Copy dependency file first (for caching)
 COPY package.json ./
-COPY server.js ./
 
 # Install dependencies
 RUN npm install
@@ -21,7 +20,7 @@ RUN chown -R roboshop:roboshop /app
 
 # Set environment variables
 ENV MONGO=true
-ENV MONGO_URL=mongodb://mongodb:27017/catalogue
+ENV MONGO_URL=mongodb://mongodb.mongodb.svc.cluster.local:27017/catalogue
 
 # Switch user
 USER roboshop
