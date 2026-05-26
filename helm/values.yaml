@@ -15,7 +15,7 @@ namespace: catalogue
 
 env:
   MONGO: "true"
-  MONGO_URL: "mongodb://root:RootPassword123@mongodb-0.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-1.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-2.mongodb-headless.mongodb.svc.cluster.local:27017/catalogue?authSource=admin&replicaSet=rs0"
+  MONGO_URL: "mongodb://root:RootPassword123@mongodb-0.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-1.mongodb-headless.mongodb.svc.cluster.local:27017/catalogue?authSource=admin&replicaSet=rs0"
 
 resources:
   limits:
