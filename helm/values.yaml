@@ -2,8 +2,8 @@ replicaCount: 2
 
 image:
   repository: 942548380129.dkr.ecr.us-east-1.amazonaws.com/catalogue
-  tag: latest
-  pullPolicy: Always
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
@@ -12,6 +12,10 @@ service:
 containerPort: 8080
 
 namespace: catalogue
+
+env:
+  MONGO: "true"
+  MONGO_URL: "mongodb://root:RootPassword123@mongodb-0.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-1.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-2.mongodb-headless.mongodb.svc.cluster.local:27017/catalogue?authSource=admin&replicaSet=rs0"
 
 resources:
   limits:
