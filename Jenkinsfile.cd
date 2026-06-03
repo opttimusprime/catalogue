@@ -1,0 +1,82 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Docker image tag to deploy')
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'qa', 'preprod', 'prod'], description: 'Target environment')
+    }
+
+    environment {
+        AWS_REGION   = "us-east-1"
+        ECR_REGISTRY = "942548380129.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REPO     = "catalogue"
+
+        K8S_NAMESPACE = "catalogue"
+        HELM_RELEASE  = "catalogue"
+        HELM_CHART    = "helm"
+    }
+
+    stages {
+        stage('Validate Inputs') {
+            steps {
+                sh """
+                    if [ -z "${IMAGE_TAG}" ]; then
+                      echo "ERROR: IMAGE_TAG is required"
+                      exit 1
+                    fi
+                """
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'develop',
+                    url: 'git@github.com:optimusprrime/catalogue.git'
+            }
+        }
+
+        stage('Update Kubeconfig') {
+            steps {
+                sh """
+                    aws eks update-kubeconfig \
+                    --region ${AWS_REGION} \
+                    --name roboshop-${ENVIRONMENT}-eks
+                """
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh """
+                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                    --namespace ${K8S_NAMESPACE} \
+                    --create-namespace \
+                    -f helm/values.yaml \
+                    -f helm/values-${ENVIRONMENT}.yaml \
+                    --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                    --set image.tag=${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh """
+                    kubectl rollout status deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
+                    kubectl get pods -n ${K8S_NAMESPACE}
+                    kubectl get svc -n ${K8S_NAMESPACE}
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Catalogue deployment completed successfully"
+        }
+
+        failure {
+            echo "Catalogue deployment failed"
+        }
+    }
+}
