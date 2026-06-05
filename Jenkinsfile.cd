@@ -9,7 +9,7 @@ pipeline {
     environment {
         AWS_REGION   = "us-east-1"
         ECR_REGISTRY = "942548380129.dkr.ecr.us-east-1.amazonaws.com"
-        ECR_REPO     = "catalogue"
+        ECR_REPO     = "roboshop/catalogue"
 
         K8S_NAMESPACE = "catalogue"
         HELM_RELEASE  = "catalogue"
@@ -31,7 +31,8 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'develop',
-                    url: 'git@github.com:optimusprrime/catalogue.git'
+                    credentialsId: 'github-ssh',
+                    url: 'git@github.com:opttimusprime/catalogue.git'
             }
         }
 
