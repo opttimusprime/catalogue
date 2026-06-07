@@ -9,15 +9,15 @@ pipeline {
     }
 
     environment {
-        AWS_REGION   = "us-east-1"
-        ECR_REGISTRY = "942548380129.dkr.ecr.us-east-1.amazonaws.com"
-        ECR_REPO     = "roboshop/catalogue"
+        AWS_REGION   = 'us-east-1'
+        ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REPO     = 'roboshop/catalogue'
 
-        K8S_NAMESPACE = "catalogue"
-        HELM_RELEASE  = "catalogue"
-        HELM_CHART    = "helm"
+        K8S_NAMESPACE = 'catalogue'
+        HELM_RELEASE  = 'catalogue'
+        HELM_CHART    = 'helm'
 
-        IMAGE_DIGEST  = ""
+        IMAGE_DIGEST  = ''
     }
 
     stages {
@@ -43,25 +43,23 @@ pipeline {
         stage('Get Image Digest') {
             steps {
                 script {
-                    env.IMAGE_DIGEST = sh(
-                        script: """
-                            aws ecr describe-images \
-                              --repository-name ${ECR_REPO} \
-                              --image-ids imageTag=${IMAGE_TAG} \
-                              --region ${AWS_REGION} \
-                              --query 'imageDetails[0].imageDigest' \
-                              --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
+                    IMAGE_DIGEST = sh(
+                script: """
+                    aws ecr describe-images \
+                      --repository-name ${ECR_REPO} \
+                      --image-ids imageTag=${params.IMAGE_TAG} \
+                      --region ${AWS_REGION} \
+                      --query 'imageDetails[0].imageDigest' \
+                      --output text
+                """,
+                returnStdout: true
+            ).trim()
 
-                    if (!env.IMAGE_DIGEST || env.IMAGE_DIGEST == "None") {
-                        error "ERROR: Image digest not found for tag: ${IMAGE_TAG}"
+                    echo "Image Digest: ${IMAGE_DIGEST}"
+
+                    if (IMAGE_DIGEST == '' || IMAGE_DIGEST == 'None') {
+                        error "ERROR: Image digest not found for tag: ${params.IMAGE_TAG}"
                     }
-
-                    echo "Image tag: ${IMAGE_TAG}"
-                    echo "Image digest: ${env.IMAGE_DIGEST}"
-                    echo "Final image: ${ECR_REGISTRY}/${ECR_REPO}@${env.IMAGE_DIGEST}"
                 }
             }
         }
@@ -109,7 +107,7 @@ pipeline {
         }
 
         failure {
-            echo "Catalogue deployment failed"
+            echo 'Catalogue deployment failed'
         }
     }
 }
