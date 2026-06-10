@@ -1,0 +1,139 @@
+pipeline {
+    agent {
+        label 'docker'
+    }
+
+    parameters {
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '',
+            description: 'Previous working image tag to rollback to'
+        )
+
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'qa', 'preprod', 'prod'],
+            description: 'Target environment'
+        )
+    }
+
+    environment {
+        AWS_REGION   = 'us-east-1'
+        ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REPO     = 'roboshop/catalogue'
+
+        K8S_NAMESPACE = 'catalogue'
+        HELM_RELEASE  = 'catalogue'
+        HELM_CHART    = './helm'
+    }
+
+    stages {
+
+        stage('Validate Inputs') {
+            steps {
+                sh '''
+                    if [ -z "${IMAGE_TAG}" ]; then
+                      echo "ERROR: IMAGE_TAG is required"
+                      exit 1
+                    fi
+                '''
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'develop',
+                    credentialsId: 'jenkins-github-ssh',
+                    url: 'git@github.com:opttimusprime/catalogue.git'
+            }
+        }
+
+        stage('Get Image Digest') {
+            steps {
+                script {
+
+                    env.IMAGE_DIGEST = sh(
+                        script: """
+                            aws ecr describe-images \
+                              --repository-name ${ECR_REPO} \
+                              --image-ids imageTag=${params.IMAGE_TAG} \
+                              --region ${AWS_REGION} \
+                              --query 'imageDetails[0].imageDigest' \
+                              --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Rollback Image Tag    : ${params.IMAGE_TAG}"
+                    echo "Rollback Image Digest : ${env.IMAGE_DIGEST}"
+
+                    if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
+                        error "ERROR: Image digest not found for tag ${params.IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+
+        stage('Update Kubeconfig') {
+            steps {
+                sh """
+                    aws eks update-kubeconfig \
+                      --region ${AWS_REGION} \
+                      --name roboshop-${params.ENVIRONMENT}-eks
+                """
+            }
+        }
+
+        stage('Rollback Deployment') {
+            steps {
+                sh """
+                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                      --namespace ${K8S_NAMESPACE} \
+                      --create-namespace \
+                      -f helm/values.yaml \
+                      -f helm/values-${params.ENVIRONMENT}.yaml \
+                      --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                      --set image.digest=${env.IMAGE_DIGEST}
+                """
+            }
+        }
+
+        stage('Verify Rollback') {
+            steps {
+                sh """
+                    kubectl rollout status deployment/catalogue -n ${K8S_NAMESPACE}
+
+                    echo "-----------------------------"
+                    echo "Running Pods"
+                    echo "-----------------------------"
+
+                    kubectl get pods -n ${K8S_NAMESPACE}
+
+                    echo "-----------------------------"
+                    echo "Running Image"
+                    echo "-----------------------------"
+
+                    kubectl get deployment catalogue \
+                      -n ${K8S_NAMESPACE} \
+                      -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+                    echo ""
+                """
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Rollback completed successfully"
+            echo "Environment : ${params.ENVIRONMENT}"
+            echo "Image Tag   : ${params.IMAGE_TAG}"
+            echo "Digest      : ${env.IMAGE_DIGEST}"
+        }
+
+        failure {
+            echo "Rollback failed"
+        }
+    }
+}
