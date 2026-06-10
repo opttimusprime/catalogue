@@ -15,20 +15,18 @@ pipeline {
 
         K8S_NAMESPACE = 'catalogue'
         HELM_RELEASE  = 'catalogue'
-        HELM_CHART    = 'helm'
-
-        IMAGE_DIGEST  = ''
+        HELM_CHART    = './helm'
     }
 
     stages {
         stage('Validate Inputs') {
             steps {
-                sh """
+                sh '''
                     if [ -z "${IMAGE_TAG}" ]; then
                       echo "ERROR: IMAGE_TAG is required"
                       exit 1
                     fi
-                """
+                '''
             }
         }
 
@@ -43,21 +41,21 @@ pipeline {
         stage('Get Image Digest') {
             steps {
                 script {
-                    IMAGE_DIGEST = sh(
-                script: """
-                    aws ecr describe-images \
-                      --repository-name ${ECR_REPO} \
-                      --image-ids imageTag=${params.IMAGE_TAG} \
-                      --region ${AWS_REGION} \
-                      --query 'imageDetails[0].imageDigest' \
-                      --output text
-                """,
-                returnStdout: true
-            ).trim()
+                    env.IMAGE_DIGEST = sh(
+                        script: """
+                            aws ecr describe-images \
+                              --repository-name ${ECR_REPO} \
+                              --image-ids imageTag=${params.IMAGE_TAG} \
+                              --region ${AWS_REGION} \
+                              --query 'imageDetails[0].imageDigest' \
+                              --output text
+                        """,
+                        returnStdout: true
+                    ).trim()
 
-                    echo "Image Digest: ${IMAGE_DIGEST}"
+                    echo "Image Digest: ${env.IMAGE_DIGEST}"
 
-                    if (IMAGE_DIGEST == '' || IMAGE_DIGEST == 'None') {
+                    if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
                         error "ERROR: Image digest not found for tag: ${params.IMAGE_TAG}"
                     }
                 }
@@ -68,8 +66,8 @@ pipeline {
             steps {
                 sh """
                     aws eks update-kubeconfig \
-                    --region ${AWS_REGION} \
-                    --name roboshop-${ENVIRONMENT}-eks
+                      --region ${AWS_REGION} \
+                      --name roboshop-${params.ENVIRONMENT}-eks
                 """
             }
         }
@@ -78,12 +76,12 @@ pipeline {
             steps {
                 sh """
                     helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
-                    --namespace ${K8S_NAMESPACE} \
-                    --create-namespace \
-                    -f helm/values.yaml \
-                    -f helm/values-${ENVIRONMENT}.yaml \
-                    --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
-                    --set image.digest=${IMAGE_DIGEST}
+                      --namespace ${K8S_NAMESPACE} \
+                      --create-namespace \
+                      -f helm/values.yaml \
+                      -f helm/values-${params.ENVIRONMENT}.yaml \
+                      --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                      --set image.digest=${env.IMAGE_DIGEST}
                 """
             }
         }
@@ -94,6 +92,8 @@ pipeline {
                     kubectl rollout status deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
                     kubectl get pods -n ${K8S_NAMESPACE}
                     kubectl get svc -n ${K8S_NAMESPACE}
+                    kubectl get externalsecret -n ${K8S_NAMESPACE}
+                    kubectl get secret catalogue-secret -n ${K8S_NAMESPACE}
                     kubectl get deployment ${HELM_RELEASE} -n ${K8S_NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}'
                     echo ""
                 """
@@ -103,7 +103,7 @@ pipeline {
 
     post {
         success {
-            echo "Catalogue deployment completed successfully using image digest: ${IMAGE_DIGEST}"
+            echo "Catalogue deployment completed successfully using image digest: ${env.IMAGE_DIGEST}"
         }
 
         failure {

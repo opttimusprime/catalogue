@@ -1,5 +1,16 @@
+namespace: catalogue
+
 replicaCount: 2
 
 image:
-  tag: "1.0.0"
+  repository: 942548380129.dkr.ecr.us-east-1.amazonaws.com/roboshop/catalogue
+  tag: "latest"
+  digest: ""
   pullPolicy: Always
+
+externalSecret:
+  awsSecretName: roboshop/qa/catalogue
+
+ingress:
+  enabled: false
+  host: catalogue-qa.optimusprime.uno

@@ -112,7 +112,9 @@ pipeline {
 
     post {
         success {
-            echo "Catalogue CI completed successfully. Image tag: ${IMAGE_TAG}"
+            echo 'Catalogue CI completed successfully'
+            echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+            echo "Latest pushed: ${ECR_REGISTRY}/${ECR_REPO}:latest"
         }
 
         failure {
