@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: catalogue
+  namespace: {{ .Values.namespace }}
   labels:
     app: catalogue
 spec:
@@ -24,6 +25,9 @@ spec:
             - name: MONGO
               value: "{{ .Values.env.MONGO }}"
             - name: MONGO_URL
-              value: "{{ .Values.env.MONGO_URL }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: {{ .Values.secret.mongoUrlKey }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+{{ toYaml .Values.resources | indent 12 }}
