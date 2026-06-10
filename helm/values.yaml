@@ -1,8 +1,11 @@
+namespace: catalogue
+
 replicaCount: 2
 
 image:
   repository: 942548380129.dkr.ecr.us-east-1.amazonaws.com/roboshop/catalogue
   tag: "1.0.0"
+  digest: ""
   pullPolicy: Always
 
 service:
@@ -11,11 +14,20 @@ service:
 
 containerPort: 8080
 
-namespace: catalogue
-
 env:
   MONGO: "true"
-  MONGO_URL: "mongodb://root:RootPassword123@mongodb-0.mongodb-headless.mongodb.svc.cluster.local:27017,mongodb-1.mongodb-headless.mongodb.svc.cluster.local:27017/catalogue?authSource=admin&replicaSet=rs0"
+
+secret:
+  enabled: true
+  name: catalogue-secret
+  mongoUrlKey: MONGO_URL
+
+externalSecret:
+  enabled: true
+  secretStoreName: aws-secrets-manager
+  secretStoreKind: ClusterSecretStore
+  awsSecretName: roboshop/dev/catalogue
+  refreshInterval: 1h
 
 resources:
   limits:
@@ -24,3 +36,12 @@ resources:
   requests:
     cpu: 250m
     memory: 256Mi
+
+ingress:
+  enabled: false
+  className: alb
+  scheme: internet-facing
+  targetType: ip
+  host: catalogue-dev.optimusprime.uno
+  path: /
+  pathType: Prefix
