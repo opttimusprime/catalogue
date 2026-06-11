@@ -24,7 +24,7 @@ secret:
 
 externalSecret:
   enabled: true
-  secretStoreName: aws-secrets-manager
+  secretStoreName: aws-secretsmanager
   secretStoreKind: ClusterSecretStore
   awsSecretName: roboshop/dev/catalogue
   refreshInterval: 1h
