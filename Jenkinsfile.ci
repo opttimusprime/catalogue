@@ -111,14 +111,21 @@ pipeline {
     }
 
     post {
-        success {
-            echo 'Catalogue CI completed successfully'
-            echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-            echo "Latest pushed: ${ECR_REGISTRY}/${ECR_REPO}:latest"
-        }
+    success {
+        echo 'Catalogue CI completed successfully'
+        echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+        echo "Latest pushed: ${ECR_REGISTRY}/${ECR_REPO}:latest"
 
-        failure {
-            echo 'Catalogue CI failed'
-        }
+        build job: 'catalogue-cd',
+        parameters: [
+            string(name: 'IMAGE_TAG', value: "${env.IMAGE_TAG}"),
+            string(name: 'ENVIRONMENT', value: 'dev')
+        ],
+        wait: false
     }
+
+    failure {
+        echo 'Catalogue CI failed'
+    }
+}
 }
