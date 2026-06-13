@@ -65,19 +65,27 @@ pipeline {
             }
         }
 
-        stage('Security Scan') {
-            steps {
-                sh '''
-                    echo "Security Scan has been completed successfully"
-                '''
-            }
-        }
-
         stage('Docker Build') {
             steps {
                 sh """
                     docker build -t ${ECR_REPO}:${IMAGE_TAG} .
                 """
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh '''
+            trivy image \
+              --severity HIGH,CRITICAL \
+              --format table \
+              -o trivy-report.txt \
+              ${ECR_REPO}:${IMAGE_TAG}
+        '''
+
+                sh 'cat trivy-report.txt'
+
+                archiveArtifacts artifacts: 'trivy-report.txt'
             }
         }
 
