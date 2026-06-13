@@ -76,16 +76,29 @@ pipeline {
         stage('Trivy Image Scan') {
             steps {
                 sh '''
+            mkdir -p trivy-reports
+
+            curl -sL \
+              https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+              -o html.tpl
+
             trivy image \
               --severity HIGH,CRITICAL \
-              --format table \
-              -o trivy-report.txt \
+              --exit-code 1 \
+              --format template \
+              --template "@html.tpl" \
+              -o trivy-reports/trivy-report.html \
               ${ECR_REPO}:${IMAGE_TAG}
         '''
 
-                sh 'cat trivy-report.txt'
-
-                archiveArtifacts artifacts: 'trivy-report.txt'
+                publishHTML([
+            allowMissing: false,
+            alwaysLinkToLastBuild: true,
+            keepAll: true,
+            reportDir: 'trivy-reports',
+            reportFiles: 'trivy-report.html',
+            reportName: 'Trivy Security Report'
+        ])
             }
         }
 
