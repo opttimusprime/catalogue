@@ -8,6 +8,8 @@ pipeline {
         ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO     = 'roboshop/catalogue'
         IMAGE_TAG    = "${BUILD_NUMBER}"
+        IMAGE_NAME   = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+        LATEST_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:latest"
     }
 
     tools {
@@ -50,8 +52,6 @@ pipeline {
                         """
                     }
                 }
-
-                echo 'SonarQube Scan completed successfully'
             }
         }
 
@@ -60,15 +60,13 @@ pipeline {
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
-
-                echo 'Quality Gate passed successfully'
             }
         }
 
         stage('Docker Build') {
             steps {
                 sh """
-                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                    docker build -t ${IMAGE_NAME} -t ${LATEST_IMAGE} .
                 """
             }
         }
@@ -86,15 +84,13 @@ pipeline {
                       --format template \
                       --template "@html.tpl" \
                       -o trivy-reports/trivy-report.html \
-                      ${ECR_REPO}:${IMAGE_TAG}
-                '''
+                      ${IMAGE_NAME}
 
-                sh '''
                     trivy image \
                       --severity HIGH,CRITICAL \
                       --exit-code 1 \
                       --no-progress \
-                      ${ECR_REPO}:${IMAGE_TAG}
+                      ${IMAGE_NAME}
                 '''
             }
         }
@@ -108,20 +104,11 @@ pipeline {
             }
         }
 
-        stage('Tag Docker Image') {
-            steps {
-                sh """
-                    docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-                    docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
-                """
-            }
-        }
-
         stage('Push Docker Image') {
             steps {
                 sh """
-                    docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-                    docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
+                    docker push ${IMAGE_NAME}
+                    docker push ${LATEST_IMAGE}
                 """
             }
         }
@@ -137,12 +124,15 @@ pipeline {
                 reportFiles: 'trivy-report.html',
                 reportName: 'Trivy Security Report'
             ])
+
+            sh """
+                docker rmi ${IMAGE_NAME} ${LATEST_IMAGE} || true
+            """
         }
 
         success {
-            echo 'Catalogue CI completed successfully'
-            echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-            echo "Latest pushed: ${ECR_REGISTRY}/${ECR_REPO}:latest"
+            echo "Catalogue CI completed successfully"
+            echo "Image pushed: ${IMAGE_NAME}"
 
             build job: 'catalogue-cd',
                 parameters: [
