@@ -30,6 +30,12 @@ pipeline {
             }
         }
 
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
         stage('Checkout Code') {
             steps {
                 git branch: 'develop',
@@ -53,11 +59,11 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "Image Digest: ${env.IMAGE_DIGEST}"
-
                     if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
                         error "ERROR: Image digest not found for tag: ${params.IMAGE_TAG}"
                     }
+
+                    echo "Image Digest: ${env.IMAGE_DIGEST}"
                 }
             }
         }
@@ -72,28 +78,53 @@ pipeline {
             }
         }
 
+        stage('Create Namespace') {
+            steps {
+                sh '''
+                    kubectl apply -f kubernetes/namespace.yaml
+                '''
+            }
+        }
+
+        stage('Helm Lint') {
+            steps {
+                sh """
+                    helm lint ${HELM_CHART} \
+                      -f helm/values.yaml \
+                      -f helm/values-${params.ENVIRONMENT}.yaml
+                """
+            }
+        }
+
         stage('Deploy to Kubernetes') {
             steps {
                 sh """
-            helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
-              --namespace ${K8S_NAMESPACE} \
-              -f helm/values.yaml \
-              -f helm/values-${params.ENVIRONMENT}.yaml \
-              --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
-              --set image.digest=${env.IMAGE_DIGEST}
-        """
+                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                      --namespace ${K8S_NAMESPACE} \
+                      -f helm/values.yaml \
+                      -f helm/values-${params.ENVIRONMENT}.yaml \
+                      --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                      --set image.digest=${env.IMAGE_DIGEST} \
+                      --atomic \
+                      --timeout 5m
+                """
             }
         }
 
         stage('Verify Deployment') {
             steps {
                 sh """
-                    kubectl rollout status deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
+                    kubectl rollout status deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE} --timeout=180s
+
                     kubectl get pods -n ${K8S_NAMESPACE}
                     kubectl get svc -n ${K8S_NAMESPACE}
                     kubectl get externalsecret -n ${K8S_NAMESPACE}
                     kubectl get secret catalogue-secret -n ${K8S_NAMESPACE}
-                    kubectl get deployment ${HELM_RELEASE} -n ${K8S_NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+                    echo "Running image:"
+                    kubectl get deployment ${HELM_RELEASE} -n ${K8S_NAMESPACE} \
+                      -o jsonpath='{.spec.template.spec.containers[0].image}'
+
                     echo ""
                 """
             }

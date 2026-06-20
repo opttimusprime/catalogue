@@ -1,139 +1,180 @@
 pipeline {
-    agent {
-        label 'docker'
-    }
+agent {
+label 'docker'
+}
 
-    parameters {
-        string(
-            name: 'IMAGE_TAG',
-            defaultValue: '',
-            description: 'Previous working image tag to rollback to'
-        )
+```
+parameters {
+    string(
+        name: 'IMAGE_TAG',
+        defaultValue: '',
+        description: 'Previous working image tag to rollback to'
+    )
 
-        choice(
-            name: 'ENVIRONMENT',
-            choices: ['dev', 'qa', 'preprod', 'prod'],
-            description: 'Target environment'
-        )
-    }
+    choice(
+        name: 'ENVIRONMENT',
+        choices: ['dev', 'qa', 'preprod', 'prod'],
+        description: 'Target environment'
+    )
+}
 
-    environment {
-        AWS_REGION   = 'us-east-1'
-        ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
-        ECR_REPO     = 'roboshop/catalogue'
+environment {
+    AWS_REGION   = 'us-east-1'
+    ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
+    ECR_REPO     = 'roboshop/catalogue'
 
-        K8S_NAMESPACE = 'catalogue'
-        HELM_RELEASE  = 'catalogue'
-        HELM_CHART    = './helm'
-    }
+    K8S_NAMESPACE = 'catalogue'
+    HELM_RELEASE  = 'catalogue'
+    HELM_CHART    = './helm'
+}
 
-    stages {
+stages {
 
-        stage('Validate Inputs') {
-            steps {
-                sh '''
-                    if [ -z "${IMAGE_TAG}" ]; then
-                      echo "ERROR: IMAGE_TAG is required"
-                      exit 1
-                    fi
-                '''
-            }
+    stage('Validate Inputs') {
+        steps {
+            sh '''
+                if [ -z "${IMAGE_TAG}" ]; then
+                  echo "ERROR: IMAGE_TAG is required"
+                  exit 1
+                fi
+            '''
         }
+    }
 
-        stage('Checkout Code') {
-            steps {
-                git branch: 'develop',
-                    credentialsId: 'jenkins-github-ssh',
-                    url: 'git@github.com:opttimusprime/catalogue.git'
-            }
+    stage('Clean Workspace') {
+        steps {
+            cleanWs()
         }
+    }
 
-        stage('Get Image Digest') {
-            steps {
-                script {
+    stage('Checkout Code') {
+        steps {
+            git branch: 'develop',
+                credentialsId: 'jenkins-github-ssh',
+                url: 'git@github.com:opttimusprime/catalogue.git'
+        }
+    }
 
-                    env.IMAGE_DIGEST = sh(
-                        script: """
-                            aws ecr describe-images \
-                              --repository-name ${ECR_REPO} \
-                              --image-ids imageTag=${params.IMAGE_TAG} \
-                              --region ${AWS_REGION} \
-                              --query 'imageDetails[0].imageDigest' \
-                              --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
+    stage('Get Image Digest') {
+        steps {
+            script {
 
-                    echo "Rollback Image Tag    : ${params.IMAGE_TAG}"
-                    echo "Rollback Image Digest : ${env.IMAGE_DIGEST}"
+                env.IMAGE_DIGEST = sh(
+                    script: """
+                        aws ecr describe-images \
+                          --repository-name ${ECR_REPO} \
+                          --image-ids imageTag=${params.IMAGE_TAG} \
+                          --region ${AWS_REGION} \
+                          --query 'imageDetails[0].imageDigest' \
+                          --output text
+                    """,
+                    returnStdout: true
+                ).trim()
 
-                    if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
-                        error "ERROR: Image digest not found for tag ${params.IMAGE_TAG}"
-                    }
+                echo "Rollback Image Tag    : ${params.IMAGE_TAG}"
+                echo "Rollback Image Digest : ${env.IMAGE_DIGEST}"
+
+                if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
+                    error "ERROR: Image digest not found for tag ${params.IMAGE_TAG}"
                 }
             }
         }
+    }
 
-        stage('Update Kubeconfig') {
-            steps {
-                sh """
-                    aws eks update-kubeconfig \
-                      --region ${AWS_REGION} \
-                      --name roboshop-${params.ENVIRONMENT}-eks
-                """
-            }
-        }
-
-        stage('Rollback Deployment') {
-            steps {
-                sh """
-                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
-                      --namespace ${K8S_NAMESPACE} \
-                      --create-namespace \
-                      -f helm/values.yaml \
-                      -f helm/values-${params.ENVIRONMENT}.yaml \
-                      --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
-                      --set image.digest=${env.IMAGE_DIGEST}
-                """
-            }
-        }
-
-        stage('Verify Rollback') {
-            steps {
-                sh """
-                    kubectl rollout status deployment/catalogue -n ${K8S_NAMESPACE}
-
-                    echo "-----------------------------"
-                    echo "Running Pods"
-                    echo "-----------------------------"
-
-                    kubectl get pods -n ${K8S_NAMESPACE}
-
-                    echo "-----------------------------"
-                    echo "Running Image"
-                    echo "-----------------------------"
-
-                    kubectl get deployment catalogue \
-                      -n ${K8S_NAMESPACE} \
-                      -o jsonpath='{.spec.template.spec.containers[0].image}'
-
-                    echo ""
-                """
-            }
+    stage('Update Kubeconfig') {
+        steps {
+            sh """
+                aws eks update-kubeconfig \
+                  --region ${AWS_REGION} \
+                  --name roboshop-${params.ENVIRONMENT}-eks
+            """
         }
     }
 
-    post {
-
-        success {
-            echo "Rollback completed successfully"
-            echo "Environment : ${params.ENVIRONMENT}"
-            echo "Image Tag   : ${params.IMAGE_TAG}"
-            echo "Digest      : ${env.IMAGE_DIGEST}"
-        }
-
-        failure {
-            echo "Rollback failed"
+    stage('Create Namespace') {
+        steps {
+            sh """
+                kubectl apply -f kubernetes/namespace.yaml
+            """
         }
     }
+
+    stage('Helm Lint') {
+        steps {
+            sh """
+                helm lint ${HELM_CHART} \
+                  -f helm/values.yaml \
+                  -f helm/values-${params.ENVIRONMENT}.yaml
+            """
+        }
+    }
+
+    stage('Rollback Deployment') {
+        steps {
+            sh """
+                helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                  --namespace ${K8S_NAMESPACE} \
+                  -f helm/values.yaml \
+                  -f helm/values-${params.ENVIRONMENT}.yaml \
+                  --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
+                  --set image.digest=${env.IMAGE_DIGEST} \
+                  --atomic \
+                  --timeout 5m
+            """
+        }
+    }
+
+    stage('Verify Rollback') {
+        steps {
+            sh """
+                kubectl rollout status deployment/catalogue \
+                  -n ${K8S_NAMESPACE} \
+                  --timeout=180s
+
+                echo "-----------------------------"
+                echo "Running Pods"
+                echo "-----------------------------"
+
+                kubectl get pods -n ${K8S_NAMESPACE}
+
+                echo "-----------------------------"
+                echo "External Secret"
+                echo "-----------------------------"
+
+                kubectl get externalsecret -n ${K8S_NAMESPACE}
+
+                echo "-----------------------------"
+                echo "Kubernetes Secret"
+                echo "-----------------------------"
+
+                kubectl get secret catalogue-secret -n ${K8S_NAMESPACE}
+
+                echo "-----------------------------"
+                echo "Running Image"
+                echo "-----------------------------"
+
+                kubectl get deployment catalogue \
+                  -n ${K8S_NAMESPACE} \
+                  -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+                echo ""
+            """
+        }
+    }
+}
+
+post {
+
+    success {
+        echo "Rollback completed successfully"
+        echo "Environment : ${params.ENVIRONMENT}"
+        echo "Image Tag   : ${params.IMAGE_TAG}"
+        echo "Digest      : ${env.IMAGE_DIGEST}"
+    }
+
+    failure {
+        echo "Rollback failed"
+    }
+}
+
 }
