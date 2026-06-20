@@ -80,9 +80,9 @@ pipeline {
 
         stage('Create Namespace') {
             steps {
-                sh """
+                sh '''
                     kubectl apply -f kubernetes/namespace.yaml
-                """
+                '''
             }
         }
 
