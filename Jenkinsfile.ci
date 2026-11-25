@@ -1,13 +1,19 @@
 pipeline {
-    agent {
-        label 'docker'
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     environment {
         AWS_REGION   = 'us-east-1'
-        ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REGISTRY = '717090908085.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO     = 'roboshop/catalogue'
         IMAGE_TAG    = "${BUILD_NUMBER}"
+        IMAGE_NAME   = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+        LATEST_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:latest"
     }
 
     tools {
@@ -23,9 +29,16 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                git branch: 'develop',
-                    credentialsId: 'jenkins-github-ssh',
-                    url: 'git@github.com:opttimusprime/catalogue.git'
+                checkout scm
+
+                script {
+                    env.GIT_COMMIT_SHA = sh(
+                        script: 'git rev-parse HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Git Commit SHA: ${env.GIT_COMMIT_SHA}"
+                }
             }
         }
 
@@ -35,97 +48,164 @@ pipeline {
             }
         }
 
-        stage('SonarQube Scan') {
-            // steps {
-            //     withSonarQubeEnv('sonarqube') {
-            //         sh """
-            //             sonar-scanner \
-            //             -Dsonar.projectKey=catalogue \
-            //             -Dsonar.projectName=catalogue \
-            //             -Dsonar.sources=.
-            //         """
-            //     }
-            // }
+        stage('Validate Application') {
             steps {
-                sh '''
-                    echo "SonarQube Scans have been completed successfully"
-                '''
+                sh 'node --check server.js'
             }
         }
 
-        stage('Quality Gate') {
-            // steps {
-            //     timeout(time: 5, unit: 'MINUTES') {
-            //         waitForQualityGate abortPipeline: true
-            //     }
-            // }
-            steps {
-                sh '''
-                    echo "Quality Gate has been passed successfully"
-                '''
-            }
-        }
+        // stage('SonarQube Scan') {
+        //     steps {
+        //         script {
+        //             def scannerHome = tool 'SonarScanner'
 
-        stage('Security Scan') {
-            steps {
-                sh '''
-                    echo "Security Scan has been completed successfully"
-                '''
-            }
-        }
+        //             withSonarQubeEnv('SonarQube') {
+        //                 sh """
+        //                     ${scannerHome}/bin/sonar-scanner \
+        //                     -Dsonar.projectKey=catalogue \
+        //                     -Dsonar.projectName=catalogue \
+        //                     -Dsonar.sources=. \
+        //                     -Dsonar.exclusions=node_modules/**,coverage/**
+        //                 """
+        //             }
+        //         }
+        //     }
+        // }
+
+        // stage('Quality Gate') {
+        //     steps {
+        //         timeout(time: 5, unit: 'MINUTES') {
+        //             waitForQualityGate abortPipeline: true
+        //         }
+        //     }
+        // }
 
         stage('Docker Build') {
             steps {
-                sh """
-                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                """
+                sh '''
+                    docker build \
+                        --pull \
+                        --no-cache \
+                        --progress=plain \
+                        -t "$IMAGE_NAME" \
+                        -t "$LATEST_IMAGE" .
+                '''
             }
         }
+
+        // stage('Trivy Image Scan') {
+        //     steps {
+        //         sh '''
+        //             mkdir -p trivy-reports
+        //
+        //             curl -fsSL \
+        //               https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+        //               -o html.tpl
+        //
+        //             trivy image \
+        //               --format template \
+        //               --template "@html.tpl" \
+        //               -o trivy-reports/trivy-report.html \
+        //               "$IMAGE_NAME"
+        //
+        //             trivy image \
+        //               --severity HIGH,CRITICAL \
+        //               --exit-code 1 \
+        //               --no-progress \
+        //               "$IMAGE_NAME"
+        //         '''
+        //     }
+        // }
 
         stage('Login to ECR') {
             steps {
-                sh """
-                    aws ecr get-login-password --region ${AWS_REGION} | \
-                    docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                """
-            }
-        }
-
-        stage('Tag Docker Image') {
-            steps {
-                sh """
-            docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-            docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
-        """
+                sh '''
+                    aws ecr get-login-password \
+                        --region "$AWS_REGION" | \
+                    docker login \
+                        --username AWS \
+                        --password-stdin "$ECR_REGISTRY"
+                '''
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                sh """
-            docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-            docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
-        """
+                sh '''
+                    docker push "$IMAGE_NAME"
+                    docker push "$LATEST_IMAGE"
+                '''
+            }
+        }
+
+        stage('Get Image Digest') {
+            steps {
+                script {
+                    env.IMAGE_DIGEST = sh(
+                        script: '''
+                            aws ecr describe-images \
+                                --region "$AWS_REGION" \
+                                --repository-name "$ECR_REPO" \
+                                --image-ids imageTag="$IMAGE_TAG" \
+                                --query 'imageDetails[0].imageDigest' \
+                                --output text
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    if (!(env.IMAGE_DIGEST ==~ /sha256:[a-f0-9]{64}/)) {
+                        error('Failed to retrieve a valid image digest')
+                    }
+
+                    echo "Image Digest: ${env.IMAGE_DIGEST}"
+                }
             }
         }
     }
 
     post {
-    success {
-        echo 'Catalogue CI completed successfully'
-        echo "Image pushed: ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-        echo "Latest pushed: ${ECR_REGISTRY}/${ECR_REPO}:latest"
+        always {
+            // publishHTML([
+            //     allowMissing: true,
+            //     alwaysLinkToLastBuild: true,
+            //     keepAll: true,
+            //     reportDir: 'trivy-reports',
+            //     reportFiles: 'trivy-report.html',
+            //     reportName: 'Trivy Security Report'
+            // ])
 
-        build job: 'catalogue-cd',
-        parameters: [
-            string(name: 'IMAGE_TAG', value: "${env.IMAGE_TAG}"),
-            string(name: 'ENVIRONMENT', value: 'dev')
-        ],
-        wait: false
-    }
+            sh '''
+                docker rmi "$IMAGE_NAME" "$LATEST_IMAGE" || true
+                docker logout "$ECR_REGISTRY" || true
+            '''
+        }
 
-    failure {
-        echo 'Catalogue CI failed'
+        success {
+            echo 'Catalogue CI completed successfully'
+            echo "Image pushed: ${env.IMAGE_NAME}"
+            echo "Image digest: ${env.IMAGE_DIGEST}"
+            echo "Git commit: ${env.GIT_COMMIT_SHA}"
+
+            build job: 'rs-catalogue-cd',
+                parameters: [
+                    string(
+                        name: 'IMAGE_TAG',
+                        value: env.IMAGE_TAG
+                    ),
+                    string(
+                        name: 'IMAGE_DIGEST',
+                        value: env.IMAGE_DIGEST
+                    ),
+                    string(
+                        name: 'GIT_COMMIT_SHA',
+                        value: env.GIT_COMMIT_SHA
+                    )
+                ],
+                wait: false
+        }
+
+        failure {
+            echo 'Catalogue CI failed'
+        }
     }
-}
 }
