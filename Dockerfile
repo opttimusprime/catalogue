@@ -1,31 +1,30 @@
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Copy dependency file first (for caching)
+# Set production environment
+ENV NODE_ENV=production
+
+# Create a non-root user and group
+RUN addgroup -S roboshop && \
+    adduser -S roboshop -G roboshop
+
+# Copy dependency file
 COPY package.json ./
 
-# Install dependencies
-RUN npm install
+# Install production dependencies
+RUN npm install --omit=dev && \
+    npm cache clean --force
 
-# Copy remaining application code
-COPY . .
+# Copy application code
+COPY --chown=roboshop:roboshop . .
 
-# Create a non-root user
-RUN addgroup -S roboshop && adduser -S roboshop -G roboshop
-
-# Give ownership
-RUN chown -R roboshop:roboshop /app
-
-# Set environment variables
-ENV MONGO=true
-
-# Switch user
+# Switch to non-root user
 USER roboshop
 
-# Expose port
+# Expose application port
 EXPOSE 8080
 
-# Start app
+# Start Catalogue application
 CMD ["node", "server.js"]
