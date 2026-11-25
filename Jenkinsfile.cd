@@ -1,32 +1,66 @@
 pipeline {
-    agent {
-        label 'docker'
+    agent any
+    
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     parameters {
-        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Docker image tag to deploy')
-        choice(name: 'ENVIRONMENT', choices: ['dev', 'qa', 'preprod', 'prod'], description: 'Target environment')
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: '',
+            description: 'Docker image tag from CI'
+        )
+
+        string(
+            name: 'IMAGE_DIGEST',
+            defaultValue: '',
+            description: 'Docker image digest from CI'
+        )
+
+        string(
+            name: 'GIT_COMMIT_SHA',
+            defaultValue: '',
+            description: 'Git commit SHA from CI'
+        )
     }
 
     environment {
-        AWS_REGION   = 'us-east-1'
-        ECR_REGISTRY = '942548380129.dkr.ecr.us-east-1.amazonaws.com'
-        ECR_REPO     = 'roboshop/catalogue'
+        AWS_REGION    = 'us-east-1'
+        ECR_REGISTRY  = '717090908085.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REPO      = 'roboshop/catalogue'
 
+        EKS_CLUSTER   = 'roboshop-dev-eks'
         K8S_NAMESPACE = 'catalogue'
         HELM_RELEASE  = 'catalogue'
         HELM_CHART    = './helm'
+
+        KUBECONFIG    = "${WORKSPACE}/.kube/config"
     }
 
     stages {
+
         stage('Validate Inputs') {
             steps {
-                sh '''
-                    if [ -z "${IMAGE_TAG}" ]; then
-                      echo "ERROR: IMAGE_TAG is required"
-                      exit 1
-                    fi
-                '''
+                script {
+                    if (!(params.IMAGE_TAG ==~ /[0-9]+/)) {
+                        error('Valid IMAGE_TAG is required')
+                    }
+
+                    if (!(params.IMAGE_DIGEST ==~ /sha256:[a-f0-9]{64}/)) {
+                        error('Valid IMAGE_DIGEST is required')
+                    }
+
+                    if (!(params.GIT_COMMIT_SHA ==~ /[a-f0-9]{40}/)) {
+                        error('Valid GIT_COMMIT_SHA is required')
+                    }
+
+                    echo "Image Tag: ${params.IMAGE_TAG}"
+                    echo "Image Digest: ${params.IMAGE_DIGEST}"
+                    echo "Git Commit SHA: ${params.GIT_COMMIT_SHA}"
+                }
             }
         }
 
@@ -38,106 +72,146 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                git branch: 'develop',
-                    credentialsId: 'jenkins-github-ssh',
-                    url: 'git@github.com:opttimusprime/catalogue.git'
+                checkout scm
+
+                sh '''
+                    git checkout --detach "$GIT_COMMIT_SHA"
+
+                    echo "Deploying Git commit:"
+                    git rev-parse HEAD
+                '''
             }
         }
 
-        stage('Get Image Digest') {
+        stage('Verify Image Digest') {
             steps {
-                script {
-                    env.IMAGE_DIGEST = sh(
-                        script: """
-                            aws ecr describe-images \
-                              --repository-name ${ECR_REPO} \
-                              --image-ids imageTag=${params.IMAGE_TAG} \
-                              --region ${AWS_REGION} \
-                              --query 'imageDetails[0].imageDigest' \
-                              --output text
-                        """,
-                        returnStdout: true
-                    ).trim()
+                sh '''
+                    ACTUAL_DIGEST=$(aws ecr describe-images \
+                        --region "$AWS_REGION" \
+                        --repository-name "$ECR_REPO" \
+                        --image-ids imageTag="$IMAGE_TAG" \
+                        --query 'imageDetails[0].imageDigest' \
+                        --output text)
 
-                    if (env.IMAGE_DIGEST == '' || env.IMAGE_DIGEST == 'None') {
-                        error "ERROR: Image digest not found for tag: ${params.IMAGE_TAG}"
-                    }
+                    if [ "$ACTUAL_DIGEST" != "$IMAGE_DIGEST" ]; then
+                        echo "ERROR: Image digest mismatch"
+                        exit 1
+                    fi
 
-                    echo "Image Digest: ${env.IMAGE_DIGEST}"
-                }
+                    echo "Image digest verified successfully"
+                '''
             }
         }
 
         stage('Update Kubeconfig') {
             steps {
-                sh """
-                    aws eks update-kubeconfig \
-                      --region ${AWS_REGION} \
-                      --name roboshop-${params.ENVIRONMENT}-eks
-                """
-            }
-        }
-
-        stage('Create Namespace') {
-            steps {
                 sh '''
-                    kubectl apply -f kubernetes/namespace.yaml
+                    mkdir -p "$(dirname "$KUBECONFIG")"
+
+                    aws eks update-kubeconfig \
+                        --region "$AWS_REGION" \
+                        --name "$EKS_CLUSTER" \
+                        --kubeconfig "$KUBECONFIG"
+
+                    kubectl get nodes
                 '''
             }
         }
 
         stage('Helm Lint') {
             steps {
-                sh """
-                    helm lint ${HELM_CHART} \
-                      -f helm/values.yaml \
-                      -f helm/values-${params.ENVIRONMENT}.yaml
-                """
+                sh '''
+                    helm lint "$HELM_CHART" \
+                        --set-string image.digest="$IMAGE_DIGEST"
+                '''
+            }
+        }
+
+        stage('Helm Template') {
+            steps {
+                sh '''
+                    helm template "$HELM_RELEASE" "$HELM_CHART" \
+                        --namespace "$K8S_NAMESPACE" \
+                        --set-string image.digest="$IMAGE_DIGEST"
+                '''
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh """
-                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
-                      --namespace ${K8S_NAMESPACE} \
-                      -f helm/values.yaml \
-                      -f helm/values-${params.ENVIRONMENT}.yaml \
-                      --set image.repository=${ECR_REGISTRY}/${ECR_REPO} \
-                      --set image.digest=${env.IMAGE_DIGEST} \
-                      --atomic \
-                      --timeout 5m
-                """
+                sh '''
+                    helm upgrade --install \
+                        "$HELM_RELEASE" "$HELM_CHART" \
+                        --namespace "$K8S_NAMESPACE" \
+                        --create-namespace \
+                        --set-string image.digest="$IMAGE_DIGEST" \
+                        --wait \
+                        --timeout 5m
+                '''
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                sh """
-                    kubectl rollout status deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE} --timeout=180s
+                sh '''
+                    kubectl rollout status \
+                        deployment/"$HELM_RELEASE" \
+                        -n "$K8S_NAMESPACE" \
+                        --timeout=300s
 
-                    kubectl get pods -n ${K8S_NAMESPACE}
-                    kubectl get svc -n ${K8S_NAMESPACE}
-                    kubectl get externalsecret -n ${K8S_NAMESPACE}
-                    kubectl get secret catalogue-secret -n ${K8S_NAMESPACE}
+                    kubectl get pods -n "$K8S_NAMESPACE" -o wide
+
+                    kubectl get svc -n "$K8S_NAMESPACE"
+
+                    kubectl wait \
+                        --for=condition=Ready \
+                        externalsecret/catalogue-external-secret \
+                        -n "$K8S_NAMESPACE" \
+                        --timeout=120s
+
+                    kubectl get externalsecret -n "$K8S_NAMESPACE"
+
+                    kubectl get secret catalogue-secret \
+                        -n "$K8S_NAMESPACE"
 
                     echo "Running image:"
-                    kubectl get deployment ${HELM_RELEASE} -n ${K8S_NAMESPACE} \
-                      -o jsonpath='{.spec.template.spec.containers[0].image}'
 
-                    echo ""
-                """
+                    RUNNING_IMAGE=$(kubectl get deployment \
+                        "$HELM_RELEASE" \
+                        -n "$K8S_NAMESPACE" \
+                        -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+                    EXPECTED_IMAGE="${ECR_REGISTRY}/${ECR_REPO}@${IMAGE_DIGEST}"
+
+                    echo "$RUNNING_IMAGE"
+
+                    if [ "$RUNNING_IMAGE" != "$EXPECTED_IMAGE" ]; then
+                        echo "ERROR: Deployed image mismatch"
+                        exit 1
+                    fi
+
+                    echo "Deployed image verified successfully"
+
+                    helm status "$HELM_RELEASE" \
+                        -n "$K8S_NAMESPACE"
+
+                    helm history "$HELM_RELEASE" \
+                        -n "$K8S_NAMESPACE"
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "Catalogue deployment completed successfully using image digest: ${env.IMAGE_DIGEST}"
+            echo 'Catalogue CD completed successfully'
+            echo "Image Tag: ${params.IMAGE_TAG}"
+            echo "Image Digest: ${params.IMAGE_DIGEST}"
+            echo "Git Commit SHA: ${params.GIT_COMMIT_SHA}"
         }
 
         failure {
-            echo 'Catalogue deployment failed'
+            echo 'Catalogue CD failed'
         }
     }
 }

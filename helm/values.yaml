@@ -3,19 +3,16 @@ namespace: catalogue
 replicaCount: 2
 
 image:
-  repository: 942548380129.dkr.ecr.us-east-1.amazonaws.com/roboshop/catalogue
+  repository: 717090908085.dkr.ecr.us-east-1.amazonaws.com/roboshop/catalogue
   tag: "1.0.0"
   digest: ""
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
   port: 8080
 
 containerPort: 8080
-
-env:
-  MONGO: "true"
 
 secret:
   enabled: true

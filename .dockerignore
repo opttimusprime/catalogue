@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+npm-debug.log*
+helm/
+kubernetes/
+Jenkinsfile*
+README.md
+sonar-project.properties
+.env
+.env.*
+coverage/
