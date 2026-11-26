@@ -1,6 +1,6 @@
 pipeline {
     agent any
-    
+
     options {
         timestamps()
         disableConcurrentBuilds()
@@ -28,20 +28,23 @@ pipeline {
     }
 
     environment {
-        AWS_REGION    = 'us-east-1'
-        ECR_REGISTRY  = '717090908085.dkr.ecr.us-east-1.amazonaws.com'
-        ECR_REPO      = 'roboshop/catalogue'
+        AWS_REGION     = 'us-east-1'
+        ECR_REGISTRY   = '717090908085.dkr.ecr.us-east-1.amazonaws.com'
+        ECR_REPO       = 'roboshop/catalogue'
 
-        EKS_CLUSTER   = 'roboshop-dev-eks'
-        K8S_NAMESPACE = 'catalogue'
-        HELM_RELEASE  = 'catalogue'
-        HELM_CHART    = './helm'
+        EKS_CLUSTER    = 'roboshop-dev-eks'
+        K8S_NAMESPACE  = 'catalogue'
+        HELM_RELEASE   = 'catalogue'
+        HELM_CHART     = './helm'
 
-        KUBECONFIG    = "${WORKSPACE}/.kube/config"
+        KUBECONFIG     = "${WORKSPACE}/.kube/config"
+
+        IMAGE_TAG      = "${params.IMAGE_TAG}"
+        IMAGE_DIGEST   = "${params.IMAGE_DIGEST}"
+        GIT_COMMIT_SHA = "${params.GIT_COMMIT_SHA}"
     }
 
     stages {
-
         stage('Validate Inputs') {
             steps {
                 script {
